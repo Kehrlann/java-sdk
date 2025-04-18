@@ -525,7 +525,8 @@ public class McpAsyncClient {
 			if (this.serverCapabilities.tools() == null) {
 				return Mono.error(new McpError("Server does not provide tools capability"));
 			}
-			return this.mcpSession.sendRequest(McpSchema.METHOD_TOOLS_CALL, callToolRequest, CALL_TOOL_RESULT_TYPE_REF);
+			return this.mcpSession.sendRequest(McpSchema.METHOD_TOOLS_CALL, callToolRequest, CALL_TOOL_RESULT_TYPE_REF,
+					true);
 		});
 	}
 

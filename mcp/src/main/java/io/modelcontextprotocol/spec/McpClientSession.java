@@ -223,13 +223,18 @@ public class McpClientSession implements McpSession {
 	 */
 	@Override
 	public <T> Mono<T> sendRequest(String method, Object requestParams, TypeReference<T> typeRef) {
+		return sendRequest(method, requestParams, typeRef, false);
+	}
+
+	public <T> Mono<T> sendRequest(String method, Object requestParams, TypeReference<T> typeRef,
+			boolean useAuthentication) {
 		String requestId = this.generateRequestId();
 
 		return Mono.<McpSchema.JSONRPCResponse>create(sink -> {
 			this.pendingResponses.put(requestId, sink);
 			McpSchema.JSONRPCRequest jsonrpcRequest = new McpSchema.JSONRPCRequest(McpSchema.JSONRPC_VERSION, method,
 					requestId, requestParams);
-			this.transport.sendMessage(jsonrpcRequest)
+			this.transport.sendMessage(jsonrpcRequest, useAuthentication)
 				// TODO: It's most efficient to create a dedicated Subscriber here
 				.subscribe(v -> {
 				}, error -> {

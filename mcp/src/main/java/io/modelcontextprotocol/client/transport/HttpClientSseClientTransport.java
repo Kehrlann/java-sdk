@@ -101,6 +101,8 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	/** Holds the SSE connection future */
 	private final AtomicReference<CompletableFuture<Void>> connectionFuture = new AtomicReference<>();
 
+	private TokenProvider tokenProvider = null;
+
 	/**
 	 * Creates a new transport instance with default HTTP client and object mapper.
 	 * @param baseUri the base URI of the MCP server
@@ -158,7 +160,7 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	public HttpClientSseClientTransport(HttpClient.Builder clientBuilder, HttpRequest.Builder requestBuilder,
 			String baseUri, String sseEndpoint, ObjectMapper objectMapper) {
 		this(clientBuilder.connectTimeout(Duration.ofSeconds(10)).build(), requestBuilder, baseUri, sseEndpoint,
-				objectMapper);
+				objectMapper, null);
 	}
 
 	/**
@@ -172,7 +174,7 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	 * @throws IllegalArgumentException if objectMapper, clientBuilder, or headers is null
 	 */
 	HttpClientSseClientTransport(HttpClient httpClient, HttpRequest.Builder requestBuilder, String baseUri,
-			String sseEndpoint, ObjectMapper objectMapper) {
+			String sseEndpoint, ObjectMapper objectMapper, TokenProvider tokenProvider) {
 		Assert.notNull(objectMapper, "ObjectMapper must not be null");
 		Assert.hasText(baseUri, "baseUri must not be empty");
 		Assert.hasText(sseEndpoint, "sseEndpoint must not be empty");
@@ -183,6 +185,7 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 		this.objectMapper = objectMapper;
 		this.httpClient = httpClient;
 		this.requestBuilder = requestBuilder;
+		this.tokenProvider = tokenProvider;
 
 		this.sseClient = new FlowSseClient(this.httpClient, requestBuilder);
 	}
@@ -213,6 +216,8 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 
 		private HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 			.header("Content-Type", "application/json");
+
+		private TokenProvider tokenProvider = null;
 
 		/**
 		 * Creates a new builder instance.
@@ -311,13 +316,18 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 			return this;
 		}
 
+		public Builder tokenProvider(TokenProvider tokenProvider) {
+			this.tokenProvider = tokenProvider;
+			return this;
+		}
+
 		/**
 		 * Builds a new {@link HttpClientSseClientTransport} instance.
 		 * @return a new transport instance
 		 */
 		public HttpClientSseClientTransport build() {
 			return new HttpClientSseClientTransport(clientBuilder.build(), requestBuilder, baseUri, sseEndpoint,
-					objectMapper);
+					objectMapper, this.tokenProvider);
 		}
 
 	}
@@ -390,8 +400,15 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	 * @return a Mono that completes when the message is sent
 	 * @throws McpError if the message endpoint is not available or the wait times out
 	 */
-	@Override
 	public Mono<Void> sendMessage(JSONRPCMessage message) {
+		return sendMessage(message, false);
+	}
+
+	/**
+	 * hack to enable using tokens.
+	 */
+	@Override
+	public Mono<Void> sendMessage(JSONRPCMessage message, boolean useAuthentication) {
 		if (isClosing) {
 			return Mono.empty();
 		}
@@ -412,9 +429,15 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 
 		try {
 			String jsonText = this.objectMapper.writeValueAsString(message);
-			HttpRequest request = this.requestBuilder.uri(URI.create(this.baseUri + endpoint))
-				.POST(HttpRequest.BodyPublishers.ofString(jsonText))
-				.build();
+			var requestBuilder = this.requestBuilder.copy();
+			requestBuilder.uri(URI.create(this.baseUri + endpoint)).POST(HttpRequest.BodyPublishers.ofString(jsonText));
+			if (useAuthentication && this.tokenProvider != null) {
+				var token = this.tokenProvider.get();
+				if (token != null) {
+					requestBuilder.header("Authorization", "Bearer " + token);
+				}
+			}
+			HttpRequest request = requestBuilder.build();
 
 			return Mono.fromFuture(
 					httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()).thenAccept(response -> {

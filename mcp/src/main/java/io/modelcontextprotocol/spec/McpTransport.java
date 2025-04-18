@@ -6,6 +6,7 @@ package io.modelcontextprotocol.spec;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
+import java.util.function.Function;
 import reactor.core.publisher.Mono;
 
 /**
@@ -67,6 +68,10 @@ public interface McpTransport {
 	 * @return a {@link Mono<Void>} that completes when the message has been sent
 	 */
 	Mono<Void> sendMessage(JSONRPCMessage message);
+
+	default Mono<Void> sendMessage(JSONRPCMessage message, boolean useAuthentication) {
+		return sendMessage(message);
+	}
 
 	/**
 	 * Unmarshals the given data into an object of the specified type.
