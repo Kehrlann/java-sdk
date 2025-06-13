@@ -5,10 +5,11 @@
 package io.modelcontextprotocol.client;
 
 import java.time.Duration;
-import java.util.List;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Mono;
 
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.ClientCapabilities;
@@ -16,6 +17,8 @@ import io.modelcontextprotocol.spec.McpSchema.GetPromptRequest;
 import io.modelcontextprotocol.spec.McpSchema.GetPromptResult;
 import io.modelcontextprotocol.spec.McpSchema.ListPromptsResult;
 import io.modelcontextprotocol.util.Assert;
+
+import static io.modelcontextprotocol.client.transport.HttpClientSseClientTransport.TOKEN_SUPPLIER_CONTEXT_KEY;
 
 /**
  * A synchronous client implementation for the Model Context Protocol (MCP) that wraps an
@@ -31,6 +34,7 @@ import io.modelcontextprotocol.util.Assert;
  * <li>Prompt template handling for standardized AI interactions
  * <li>Real-time notifications for tools, resources, and prompts changes
  * <li>Structured logging with configurable severity levels
+ * <li>OAuth2 authorization support
  * </ul>
  *
  * <p>
@@ -64,14 +68,19 @@ public class McpSyncClient implements AutoCloseable {
 
 	private final McpAsyncClient delegate;
 
+	private final McpSyncTokenSupplier tokenSupplier;
+
 	/**
 	 * Create a new McpSyncClient with the given delegate.
 	 * @param delegate the asynchronous kernel on top of which this synchronous client
-	 * provides a blocking API.
+	 * @param tokenSupplier the token supplier which fetches and OAUth2 token provides a
+	 * blocking API.
 	 */
-	McpSyncClient(McpAsyncClient delegate) {
+	McpSyncClient(McpAsyncClient delegate, McpSyncTokenSupplier tokenSupplier) {
 		Assert.notNull(delegate, "The delegate can not be null");
+		Assert.notNull(tokenSupplier, "The tokenSupplier can not be null");
 		this.delegate = delegate;
+		this.tokenSupplier = tokenSupplier;
 	}
 
 	/**
@@ -170,28 +179,38 @@ public class McpSyncClient implements AutoCloseable {
 	public McpSchema.InitializeResult initialize() {
 		// TODO: block takes no argument here as we assume the async client is
 		// configured with a requestTimeout at all times
-		return this.delegate.initialize().block();
+		return withOAuth(this.delegate.initialize()).block();
+	}
+
+	private <T> Mono<T> withOAuth(Mono<T> action) {
+		Optional<String> tokenOpt = tokenSupplier.getToken();
+		if (tokenOpt.isPresent()) {
+			String tokenValue = tokenOpt.get();
+			return action.contextWrite(
+					(ctx) -> ctx.put(TOKEN_SUPPLIER_CONTEXT_KEY, (McpAsyncTokenSupplier) () -> Mono.just(tokenValue)));
+		}
+		return action;
 	}
 
 	/**
 	 * Send a roots/list_changed notification.
 	 */
 	public void rootsListChangedNotification() {
-		this.delegate.rootsListChangedNotification().block();
+		withOAuth(this.delegate.rootsListChangedNotification()).block();
 	}
 
 	/**
 	 * Add a roots dynamically.
 	 */
 	public void addRoot(McpSchema.Root root) {
-		this.delegate.addRoot(root).block();
+		withOAuth(this.delegate.addRoot(root)).block();
 	}
 
 	/**
 	 * Remove a root dynamically.
 	 */
 	public void removeRoot(String rootUri) {
-		this.delegate.removeRoot(rootUri).block();
+		withOAuth(this.delegate.removeRoot(rootUri)).block();
 	}
 
 	/**
@@ -199,7 +218,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return
 	 */
 	public Object ping() {
-		return this.delegate.ping().block();
+		return withOAuth(this.delegate.ping()).block();
 	}
 
 	// --------------------------
@@ -217,7 +236,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * Boolean indicating if the execution failed (true) or succeeded (false/absent)
 	 */
 	public McpSchema.CallToolResult callTool(McpSchema.CallToolRequest callToolRequest) {
-		return this.delegate.callTool(callToolRequest).block();
+		return withOAuth(this.delegate.callTool(callToolRequest)).block();
 	}
 
 	/**
@@ -227,7 +246,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * pagination if more tools are available
 	 */
 	public McpSchema.ListToolsResult listTools() {
-		return this.delegate.listTools().block();
+		return withOAuth(this.delegate.listTools()).block();
 	}
 
 	/**
@@ -238,7 +257,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * pagination if more tools are available
 	 */
 	public McpSchema.ListToolsResult listTools(String cursor) {
-		return this.delegate.listTools(cursor).block();
+		return withOAuth(this.delegate.listTools(cursor)).block();
 	}
 
 	// --------------------------
@@ -250,7 +269,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return The list of all resources result
 	 */
 	public McpSchema.ListResourcesResult listResources() {
-		return this.delegate.listResources().block();
+		return withOAuth(this.delegate.listResources()).block();
 	}
 
 	/**
@@ -259,7 +278,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return The list of resources result
 	 */
 	public McpSchema.ListResourcesResult listResources(String cursor) {
-		return this.delegate.listResources(cursor).block();
+		return withOAuth(this.delegate.listResources(cursor)).block();
 	}
 
 	/**
@@ -268,7 +287,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return the resource content.
 	 */
 	public McpSchema.ReadResourceResult readResource(McpSchema.Resource resource) {
-		return this.delegate.readResource(resource).block();
+		return withOAuth(this.delegate.readResource(resource)).block();
 	}
 
 	/**
@@ -277,7 +296,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return the resource content.
 	 */
 	public McpSchema.ReadResourceResult readResource(McpSchema.ReadResourceRequest readResourceRequest) {
-		return this.delegate.readResource(readResourceRequest).block();
+		return withOAuth(this.delegate.readResource(readResourceRequest)).block();
 	}
 
 	/**
@@ -285,7 +304,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return The list of all resource templates result.
 	 */
 	public McpSchema.ListResourceTemplatesResult listResourceTemplates() {
-		return this.delegate.listResourceTemplates().block();
+		return withOAuth(this.delegate.listResourceTemplates()).block();
 	}
 
 	/**
@@ -297,7 +316,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return The list of resource templates result.
 	 */
 	public McpSchema.ListResourceTemplatesResult listResourceTemplates(String cursor) {
-		return this.delegate.listResourceTemplates(cursor).block();
+		return withOAuth(this.delegate.listResourceTemplates(cursor)).block();
 	}
 
 	/**
@@ -310,7 +329,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * subscribe to.
 	 */
 	public void subscribeResource(McpSchema.SubscribeRequest subscribeRequest) {
-		this.delegate.subscribeResource(subscribeRequest).block();
+		withOAuth(this.delegate.subscribeResource(subscribeRequest)).block();
 	}
 
 	/**
@@ -319,7 +338,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * to unsubscribe from.
 	 */
 	public void unsubscribeResource(McpSchema.UnsubscribeRequest unsubscribeRequest) {
-		this.delegate.unsubscribeResource(unsubscribeRequest).block();
+		withOAuth(this.delegate.unsubscribeResource(unsubscribeRequest)).block();
 	}
 
 	// --------------------------
@@ -331,7 +350,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return The list of all prompts result.
 	 */
 	public ListPromptsResult listPrompts() {
-		return this.delegate.listPrompts().block();
+		return withOAuth(this.delegate.listPrompts()).block();
 	}
 
 	/**
@@ -340,11 +359,11 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return The list of prompts result.
 	 */
 	public ListPromptsResult listPrompts(String cursor) {
-		return this.delegate.listPrompts(cursor).block();
+		return withOAuth(this.delegate.listPrompts(cursor)).block();
 	}
 
 	public GetPromptResult getPrompt(GetPromptRequest getPromptRequest) {
-		return this.delegate.getPrompt(getPromptRequest).block();
+		return withOAuth(this.delegate.getPrompt(getPromptRequest)).block();
 	}
 
 	/**
@@ -352,7 +371,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @param loggingLevel the min logging level
 	 */
 	public void setLoggingLevel(McpSchema.LoggingLevel loggingLevel) {
-		this.delegate.setLoggingLevel(loggingLevel).block();
+		withOAuth(this.delegate.setLoggingLevel(loggingLevel)).block();
 	}
 
 	/**
@@ -362,7 +381,7 @@ public class McpSyncClient implements AutoCloseable {
 	 * @return the completion result containing suggested values.
 	 */
 	public McpSchema.CompleteResult completeCompletion(McpSchema.CompleteRequest completeRequest) {
-		return this.delegate.completeCompletion(completeRequest).block();
+		return withOAuth(this.delegate.completeCompletion(completeRequest)).block();
 	}
 
 }
