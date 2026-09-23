@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.modelcontextprotocol.json.TypeRef;
+import io.modelcontextprotocol.json.schema.JsonSchemaValidator;
 import io.modelcontextprotocol.spec.McpSchema.TextResourceContents;
 import net.javacrumbs.jsonunit.core.Option;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -1206,22 +1207,22 @@ public class McpSchemaTests {
 	void testToolOutputSchemaWithExplicitDialect() throws Exception {
 		Map<String, Object> inputSchema = Map.of("type", "object");
 		Map<String, Object> outputSchema = new HashMap<>();
-		outputSchema.put("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		outputSchema.put("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 		outputSchema.put("type", "object");
 		outputSchema.put("properties", Map.of("count", Map.of("type", "integer")));
 
 		McpSchema.Tool tool = McpSchema.Tool.builder("counter", inputSchema).outputSchema(outputSchema).build();
 
 		String json = JSON_MAPPER.writeValueAsString(tool);
-		assertThatJson(json).inPath("$.outputSchema.$schema").isEqualTo(McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		assertThatJson(json).inPath("$.outputSchema.$schema").isEqualTo(JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 
 		McpSchema.Tool parsed = JSON_MAPPER.readValue(json, McpSchema.Tool.class);
-		assertThat(parsed.outputSchema()).containsEntry("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		assertThat(parsed.outputSchema()).containsEntry("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 	}
 
 	@Test
 	void testToolPreserves2020_12Keywords() throws Exception {
-		Map<String, Object> inputSchema = Map.of("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12, "type", "object",
+		Map<String, Object> inputSchema = Map.of("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type", "object",
 				"$defs",
 				Map.of("address",
 						Map.of("type", "object", "properties",
@@ -1233,7 +1234,7 @@ public class McpSchemaTests {
 		McpSchema.Tool parsed = JSON_MAPPER.readValue(JSON_MAPPER.writeValueAsString(tool), McpSchema.Tool.class);
 
 		Map<String, Object> rt = parsed.inputSchema();
-		assertThat(rt).containsEntry("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		assertThat(rt).containsEntry("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 		assertThat(rt).containsKey("$defs");
 		assertThat(rt).containsEntry("additionalProperties", false);
 	}
@@ -1705,7 +1706,7 @@ public class McpSchemaTests {
 	@Test
 	void testElicitRequestSchemaWithExplicitDialect() throws Exception {
 		Map<String, Object> requestedSchema = new HashMap<>();
-		requestedSchema.put("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		requestedSchema.put("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 		requestedSchema.put("type", "object");
 		requestedSchema.put("properties", Map.of("name", Map.of("type", "string")));
 		requestedSchema.put("required", List.of("name"));
@@ -1714,11 +1715,11 @@ public class McpSchemaTests {
 			.build();
 
 		String json = JSON_MAPPER.writeValueAsString(request);
-		assertThatJson(json).inPath("$.requestedSchema.$schema").isEqualTo(McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		assertThatJson(json).inPath("$.requestedSchema.$schema").isEqualTo(JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 
 		McpSchema.ElicitFormRequest parsed = (McpSchema.ElicitFormRequest) JSON_MAPPER.readValue(json,
 				McpSchema.ElicitRequest.class);
-		assertThat(parsed.requestedSchema()).containsEntry("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12);
+		assertThat(parsed.requestedSchema()).containsEntry("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 	}
 
 	@Test

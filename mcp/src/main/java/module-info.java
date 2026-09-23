@@ -10,6 +10,8 @@ module io.modelcontextprotocol.sdk.mcp {
 
 	requires transitive io.modelcontextprotocol.sdk.mcp.core;
 
+	requires transitive io.modelcontextprotocol.sdk.mcp.json;
+
 	requires transitive io.modelcontextprotocol.sdk.mcp.json.jackson3;
 
 	// mcp-core and mcp-json-jackson3 are automatic modules, so they cannot pull their

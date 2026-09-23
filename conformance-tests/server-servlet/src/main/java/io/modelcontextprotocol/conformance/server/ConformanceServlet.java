@@ -7,6 +7,7 @@ import java.util.Map;
 
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.json.TypeRef;
+import io.modelcontextprotocol.json.schema.JsonSchemaValidator;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.transport.DefaultServerTransportSecurityValidator;
@@ -45,7 +46,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static io.modelcontextprotocol.spec.McpSchema.EnumSchemaOption;
-import static io.modelcontextprotocol.spec.McpSchema.JSON_SCHEMA_DIALECT_2020_12;
 import static io.modelcontextprotocol.spec.McpSchema.LegacyTitledEnumSchema;
 import static io.modelcontextprotocol.spec.McpSchema.TitledMultiSelectEnumSchema;
 import static io.modelcontextprotocol.spec.McpSchema.TitledMultiSelectItems;
@@ -418,8 +418,8 @@ public class ConformanceServlet {
 				// json_schema_2020_12_tool - SEP-1613 dialect/keyword preservation
 				McpServerFeatures.SyncToolSpecification.builder()
 					.tool(Tool
-						.builder("json_schema_2020_12_tool", Map.of("$schema", JSON_SCHEMA_DIALECT_2020_12, "type",
-								"object", "$defs",
+						.builder("json_schema_2020_12_tool", Map.of("$schema",
+								JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type", "object", "$defs",
 								Map.of("address",
 										Map.of("type", "object", "properties",
 												Map.of("street", Map.of("type", "string"), "city",

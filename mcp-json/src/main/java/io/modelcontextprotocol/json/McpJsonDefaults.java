@@ -5,7 +5,6 @@ package io.modelcontextprotocol.json;
 
 import io.modelcontextprotocol.json.schema.JsonSchemaValidator;
 import io.modelcontextprotocol.json.schema.JsonSchemaValidatorSupplier;
-import io.modelcontextprotocol.util.McpServiceLoader;
 
 /**
  * This class is to be used to provide access to the default {@link McpJsonMapper} and to

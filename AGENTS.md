@@ -6,6 +6,8 @@ implement MCP clients and servers (sync and async) over stdio, SSE, and Streamab
 ## Modules
 
 - `mcp-core` — protocol types, schema, client/server implementation, transports
+- `mcp-core-modern` — implementation of the `2026-07-28` protocol revision (see `design.md`)
+- `mcp-demo-server`, `mcp-demo-client` — unpublished apps for experimenting with the `mcp-core-modern` APIs
 - `mcp-json`, `mcp-json-jackson2`, `mcp-json-jackson3` — JSON binding abstraction + Jackson implementations
 - `mcp` — pom-only project, single dependency pulling both `mcp-core` and `mcp-json-jackson3`
 - `mcp-bom` — Maven BOM for dependency management

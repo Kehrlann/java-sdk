@@ -33,10 +33,24 @@
                 <version>${project.version}</version>
             </dependency>
 
+            <!-- Core MCP (2026-07-28) -->
+            <dependency>
+                <groupId>io.modelcontextprotocol.sdk</groupId>
+                <artifactId>mcp-core-modern</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
             <!-- MCP -->
             <dependency>
                 <groupId>io.modelcontextprotocol.sdk</groupId>
                 <artifactId>mcp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- MCP JSON -->
+            <dependency>
+                <groupId>io.modelcontextprotocol.sdk</groupId>
+                <artifactId>mcp-json</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

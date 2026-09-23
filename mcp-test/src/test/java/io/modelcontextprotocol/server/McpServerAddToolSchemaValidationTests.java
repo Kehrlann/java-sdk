@@ -2,16 +2,11 @@
  * Copyright 2026-2026 the original author or authors.
  */
 
-package io.modelcontextprotocol.json;
+package io.modelcontextprotocol.server;
 
 import java.util.Map;
 
-import tools.jackson.databind.json.JsonMapper;
-import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
-import io.modelcontextprotocol.json.schema.jackson3.DefaultJsonSchemaValidator;
-import io.modelcontextprotocol.server.McpAsyncServer;
-import io.modelcontextprotocol.server.McpServer;
-import io.modelcontextprotocol.server.McpServerFeatures;
+import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import io.modelcontextprotocol.spec.McpServerTransportProvider;
@@ -25,29 +20,23 @@ import static org.mockito.Mockito.mock;
 
 /**
  * Integration tests for {@link McpAsyncServer#addTool} schema validation using the real
- * {@link DefaultJsonSchemaValidator}.
+ * default JSON schema validator.
  */
 class McpServerAddToolSchemaValidationTests {
 
 	private McpServerTransportProvider transportProvider;
 
-	private JacksonMcpJsonMapper jsonMapper;
-
-	private DefaultJsonSchemaValidator validator;
-
 	@BeforeEach
 	void setUp() {
 		transportProvider = mock(McpServerTransportProvider.class);
-		jsonMapper = new JacksonMcpJsonMapper(JsonMapper.builder().build());
-		validator = new DefaultJsonSchemaValidator();
 	}
 
 	private McpAsyncServer buildServer() {
 		return McpServer.async(transportProvider)
 			.serverInfo("test", "1.0")
-			.jsonMapper(jsonMapper)
+			.jsonMapper(McpJsonDefaults.getMapper())
 			.capabilities(McpSchema.ServerCapabilities.builder().tools(false).build())
-			.jsonSchemaValidator(validator)
+			.jsonSchemaValidator(McpJsonDefaults.getSchemaValidator())
 			.build();
 	}
 

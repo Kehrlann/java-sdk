@@ -66,10 +66,16 @@ Everything under `io.modelcontextprotocol.json` in `mcp-core` (`McpJsonMapper`,
 `mcp-core` and `mcp-json-jackson{2,3}` depend on `mcp-json`; the Jackson modules
 no longer depend on `mcp-core`.
 
-Couplings to cut when extracting:
-- `McpJsonDefaults` uses `util.McpServiceLoader`.
-- `DefaultJsonSchemaValidator` (both Jackson modules) uses `util.Assert` and
-  `McpSchema.JSON_SCHEMA_DIALECT_2020_12`.
+Couplings cut when extracting:
+- `McpJsonDefaults` used `util.McpServiceLoader`. It moved to
+  `io.modelcontextprotocol.json.McpServiceLoader` in `mcp-json`. `mcp-core` keeps
+  a deprecated `util.McpServiceLoader` subclass for compatibility, since
+  splitting the `util` package across two jars would break JPMS.
+- `DefaultJsonSchemaValidator` (both Jackson modules) used `util.Assert` and
+  `McpSchema.JSON_SCHEMA_DIALECT_2020_12`. Both are inlined.
+- `mcp-core`'s bnd `Export-Package` excludes `io.modelcontextprotocol.json.*`,
+  otherwise bnd copies the classes from the classpath back into the `mcp-core`
+  bundle.
 
 *Rationale:* the JSON abstraction is independent of any protocol revision.
 Having it in its own artifact lets the existing and the new core share one JSON

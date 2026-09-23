@@ -18,8 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import io.modelcontextprotocol.spec.McpSchema;
-
 import io.modelcontextprotocol.json.schema.jackson3.DefaultJsonSchemaValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +30,7 @@ import org.mockito.MockitoAnnotations;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.modelcontextprotocol.json.schema.JsonSchemaValidator;
 import io.modelcontextprotocol.json.schema.JsonSchemaValidator.ValidationResponse;
 
 /**
@@ -818,8 +817,8 @@ class DefaultJsonSchemaValidatorTests {
 
 	@Test
 	void validatesSchemaWithExplicit2020_12Dialect() {
-		Map<String, Object> schema = Map.of("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12, "type", "object",
-				"properties", Map.of("name", Map.of("type", "string")), "required", List.of("name"));
+		Map<String, Object> schema = Map.of("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type",
+				"object", "properties", Map.of("name", Map.of("type", "string")), "required", List.of("name"));
 
 		assertTrue(validator.validate(schema, Map.of("name", "alice")).valid());
 		assertFalse(validator.validate(schema, Map.of()).valid());
@@ -836,7 +835,8 @@ class DefaultJsonSchemaValidatorTests {
 
 	@Test
 	void validatesOutputAgainstSchemaWithDefsAndRef() {
-		Map<String, Object> schema = Map.of("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12, "type", "object", "$defs",
+		Map<String, Object> schema = Map.of("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type",
+				"object", "$defs",
 				Map.of("address",
 						Map.of("type", "object", "properties",
 								Map.of("street", Map.of("type", "string"), "city", Map.of("type", "string")))),
@@ -860,8 +860,8 @@ class DefaultJsonSchemaValidatorTests {
 
 	@Test
 	void validateSchemaAcceptsValid2020_12SchemaWithExplicitDialect() {
-		Map<String, Object> schema = Map.of("$schema", McpSchema.JSON_SCHEMA_DIALECT_2020_12, "type", "object",
-				"properties", Map.of("count", Map.of("type", "integer")));
+		Map<String, Object> schema = Map.of("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type",
+				"object", "properties", Map.of("count", Map.of("type", "integer")));
 
 		assertTrue(validator.validateSchema(schema).valid());
 	}

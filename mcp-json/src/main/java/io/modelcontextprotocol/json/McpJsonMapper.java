@@ -9,7 +9,7 @@ import java.io.IOException;
 /**
  * Abstraction for JSON serialization/deserialization to decouple the SDK from any
  * specific JSON library. A default implementation backed by Jackson is provided in
- * io.modelcontextprotocol.spec.json.jackson.JacksonJsonMapper.
+ * {@code JacksonJsonMapper}.
  */
 public interface McpJsonMapper {
 

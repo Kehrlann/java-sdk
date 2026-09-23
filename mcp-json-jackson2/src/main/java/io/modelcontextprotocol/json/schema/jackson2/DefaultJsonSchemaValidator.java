@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.networknt.schema.SchemaLocation;
-import io.modelcontextprotocol.util.Assert;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,7 +20,6 @@ import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.dialect.Dialects;
 
 import io.modelcontextprotocol.json.schema.JsonSchemaValidator;
-import io.modelcontextprotocol.spec.McpSchema;
 
 /**
  * Default implementation of the {@link JsonSchemaValidator} interface. This class
@@ -92,9 +90,11 @@ public class DefaultJsonSchemaValidator implements JsonSchemaValidator {
 
 	@Override
 	public ValidationResponse validateSchema(Map<String, Object> schema) {
-		Assert.notNull(schema, "schema must not be null");
+		if (schema == null) {
+			throw new IllegalArgumentException("schema must not be null");
+		}
 		Object declaredDialect = schema.get("$schema");
-		if (declaredDialect != null && !McpSchema.JSON_SCHEMA_DIALECT_2020_12.equals(declaredDialect.toString())) {
+		if (declaredDialect != null && !JSON_SCHEMA_DIALECT_2020_12.equals(declaredDialect.toString())) {
 			return ValidationResponse.asValid(null);
 		}
 		if (this.metaSchema202012 == null) {

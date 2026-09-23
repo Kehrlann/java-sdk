@@ -14,6 +14,11 @@ import java.util.Map;
 public interface JsonSchemaValidator {
 
 	/**
+	 * The JSON Schema 2020-12 dialect URI, the default dialect for MCP schemas.
+	 */
+	String JSON_SCHEMA_DIALECT_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+
+	/**
 	 * Asserts that the given schema document is a structurally valid JSON Schema. Schemas
 	 * without an explicit {@code $schema} declaration, or those that declare JSON Schema
 	 * 2020-12, are validated against the 2020-12 meta-schema. Schemas that explicitly
