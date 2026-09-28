@@ -1943,7 +1943,7 @@ public final class McpSchema {
 	@JsonTypeInfo(use = JsonTypeInfo.Id.DEDUCTION)
 	@JsonSubTypes({ @JsonSubTypes.Type(value = TextResourceContents.class),
 			@JsonSubTypes.Type(value = BlobResourceContents.class) })
-	public sealed interface ResourceContents permits TextResourceContents, BlobResourceContents {
+	public interface ResourceContents {
 
 		String uri();
 
@@ -2872,7 +2872,7 @@ public final class McpSchema {
 			@JsonSubTypes.Type(value = AudioContent.class, name = AudioContent.TYPE),
 			@JsonSubTypes.Type(value = ResourceLink.class, name = ResourceLink.TYPE),
 			@JsonSubTypes.Type(value = EmbeddedResource.class, name = EmbeddedResource.TYPE) })
-	public sealed interface Content permits TextContent, ImageContent, AudioContent, ResourceLink, EmbeddedResource {
+	public interface Content {
 
 		String type();
 
@@ -3343,7 +3343,7 @@ public final class McpSchema {
 	@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "type")
 	@JsonSubTypes({ @JsonSubTypes.Type(value = PromptReference.class, name = PromptReference.TYPE),
 			@JsonSubTypes.Type(value = ResourceTemplateReference.class, name = ResourceTemplateReference.TYPE) })
-	public sealed interface CompleteReference permits PromptReference, ResourceTemplateReference {
+	public interface CompleteReference {
 
 		String type();
 
@@ -3668,7 +3668,7 @@ public final class McpSchema {
 	 */
 	@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "method")
 	@JsonSubTypes({ @JsonSubTypes.Type(value = ElicitRequest.class, name = METHOD_ELICITATION_CREATE) })
-	public sealed interface InputRequest permits ElicitRequest {
+	public interface InputRequest {
 
 		String method();
 
@@ -3811,7 +3811,7 @@ public final class McpSchema {
 			defaultImpl = ElicitFormParams.class)
 	@JsonSubTypes({ @JsonSubTypes.Type(value = ElicitFormParams.class, name = ElicitFormParams.MODE),
 			@JsonSubTypes.Type(value = ElicitUrlParams.class, name = ElicitUrlParams.MODE) })
-	public sealed interface ElicitRequestParams permits ElicitFormParams, ElicitUrlParams {
+	public interface ElicitRequestParams {
 
 		String mode();
 
