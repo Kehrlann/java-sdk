@@ -1214,7 +1214,8 @@ public class McpSchemaTests {
 		McpSchema.Tool tool = McpSchema.Tool.builder("counter", inputSchema).outputSchema(outputSchema).build();
 
 		String json = JSON_MAPPER.writeValueAsString(tool);
-		assertThatJson(json).inPath("$.outputSchema.$schema").isEqualTo(JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
+		assertThatJson(json).inPath("$.outputSchema.$schema")
+			.isEqualTo(JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 
 		McpSchema.Tool parsed = JSON_MAPPER.readValue(json, McpSchema.Tool.class);
 		assertThat(parsed.outputSchema()).containsEntry("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
@@ -1222,8 +1223,8 @@ public class McpSchemaTests {
 
 	@Test
 	void testToolPreserves2020_12Keywords() throws Exception {
-		Map<String, Object> inputSchema = Map.of("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type", "object",
-				"$defs",
+		Map<String, Object> inputSchema = Map.of("$schema", JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12, "type",
+				"object", "$defs",
 				Map.of("address",
 						Map.of("type", "object", "properties",
 								Map.of("street", Map.of("type", "string"), "city", Map.of("type", "string")))),
@@ -1715,7 +1716,8 @@ public class McpSchemaTests {
 			.build();
 
 		String json = JSON_MAPPER.writeValueAsString(request);
-		assertThatJson(json).inPath("$.requestedSchema.$schema").isEqualTo(JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
+		assertThatJson(json).inPath("$.requestedSchema.$schema")
+			.isEqualTo(JsonSchemaValidator.JSON_SCHEMA_DIALECT_2020_12);
 
 		McpSchema.ElicitFormRequest parsed = (McpSchema.ElicitFormRequest) JSON_MAPPER.readValue(json,
 				McpSchema.ElicitRequest.class);

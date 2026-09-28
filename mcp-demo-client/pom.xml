@@ -22,6 +22,9 @@
 
 	<properties>
 		<module.name>io.modelcontextprotocol.sdk.demo.client</module.name>
+		<java.version>25</java.version>
+		<maven.compiler.source>25</maven.compiler.source>
+		<maven.compiler.target>25</maven.compiler.target>
 		<maven.deploy.skip>true</maven.deploy.skip>
 	</properties>
 
