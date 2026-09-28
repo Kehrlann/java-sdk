@@ -1,0 +1,6 @@
+[project]
+name = "mcp-demo-server-tests"
+version = "0.1.0"
+description = "Test harness running a Python MCP client against mcp-demo-server"
+requires-python = ">=3.11"
+dependencies = ["mcp==2.2.0"]
