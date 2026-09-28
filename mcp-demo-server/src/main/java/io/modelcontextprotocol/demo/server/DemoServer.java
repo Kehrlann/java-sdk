@@ -5,6 +5,9 @@
 package io.modelcontextprotocol.demo.server;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -21,6 +24,7 @@ import io.modelcontextprotocol.modern.server.McpServerFeatures.ResourceSpecifica
 import io.modelcontextprotocol.modern.server.McpServerFeatures.ResourceTemplateSpecification;
 import io.modelcontextprotocol.modern.server.McpServerFeatures.StreamingToolSpecification;
 import io.modelcontextprotocol.modern.server.McpServerFeatures.ToolSpecification;
+import io.modelcontextprotocol.modern.server.transport.HttpServletServerTransport;
 import io.modelcontextprotocol.modern.server.transport.StdioServerTransport;
 import io.modelcontextprotocol.modern.spec.McpError;
 import io.modelcontextprotocol.modern.spec.McpSchema.CacheScope;
@@ -50,10 +54,13 @@ import io.modelcontextprotocol.modern.spec.McpSchema.TextResourceContents;
 import io.modelcontextprotocol.modern.spec.McpSchema.Tool;
 import io.modelcontextprotocol.modern.spec.McpSchema.ToolAnnotations;
 import io.modelcontextprotocol.modern.util.DefaultMcpUriTemplateManager;
+import org.apache.catalina.Context;
+import org.apache.catalina.LifecycleException;
+import org.apache.catalina.connector.Connector;
+import org.apache.catalina.startup.Tomcat;
 
 /**
- * A demo MCP server, over stdio, showcasing the features of the {@code 2026-07-28} server
- * API:
+ * A demo MCP server showcasing the features of the {@code 2026-07-28} server API:
  * <ul>
  * <li>tools: plain ({@code echo}, {@code client_info}), with structured output
  * ({@code add}), streaming progress and honoring cancellation ({@code countdown}), and
@@ -62,16 +69,30 @@ import io.modelcontextprotocol.modern.util.DefaultMcpUriTemplateManager;
  * <li>a prompt;</li>
  * <li>completion of prompt and resource template arguments.</li>
  * </ul>
- * Build and run it with:
+ * The transport is chosen by the {@code MCP_MODE} environment variable:
+ * <ul>
+ * <li>{@code http}, the default: Streamable HTTP, at {@code http://localhost:8080/mcp}.
+ * The port is set by the {@code MCP_PORT} environment variable;</li>
+ * <li>{@code stdio}: stdio, for MCP clients that launch the server.</li>
+ * </ul>
+ * With {@code MCP_CONFORMANCE=true}, the server also serves the fixtures of the MCP
+ * conformance suite, see {@link ConformanceFixtures}. Build and run it with:
  *
  * <pre>
  * ./mvnw -pl mcp-demo-server -am package -DskipTests
  * java -jar mcp-demo-server/target/mcp-demo-server-2.1.0-SNAPSHOT.jar
+ * MCP_MODE=stdio java -jar mcp-demo-server/target/mcp-demo-server-2.1.0-SNAPSHOT.jar
  * </pre>
  */
 public final class DemoServer {
 
 	private static final McpJsonMapper jsonMapper = McpJsonDefaults.getMapper();
+
+	/**
+	 * Whether to also serve the fixtures of the MCP conformance suite, see
+	 * {@link ConformanceFixtures}.
+	 */
+	private static final boolean CONFORMANCE = Boolean.parseBoolean(System.getenv("MCP_CONFORMANCE"));
 
 	private static final List<String> CITIES = List.of("Amsterdam", "Berlin", "Lisbon", "London", "Madrid", "Paris",
 			"Porto", "Rome");
@@ -82,12 +103,44 @@ public final class DemoServer {
 	private DemoServer() {
 	}
 
-	public static void main(String[] args) throws IOException {
-		StdioServerTransport.builder(server()).build().run();
+	public static void main(String[] args) throws Exception {
+		String mode = System.getenv().getOrDefault("MCP_MODE", "http");
+		switch (mode) {
+			case "http" -> runHttp(Integer.parseInt(System.getenv().getOrDefault("MCP_PORT", "8080")));
+			case "stdio" -> StdioServerTransport.builder(server()).build().run();
+			default -> {
+				System.err.println("Unknown MCP_MODE '" + mode + "': expected 'http' or 'stdio'");
+				System.exit(1);
+			}
+		}
+	}
+
+	/**
+	 * Serves the server at {@code /mcp}, on an embedded Tomcat bound to the loopback
+	 * interface only, as servers running locally should, until the process is stopped.
+	 */
+	private static void runHttp(int port) throws LifecycleException, IOException {
+		Path baseDir = Files.createTempDirectory("mcp-demo-server");
+		Tomcat tomcat = new Tomcat();
+		tomcat.setBaseDir(baseDir.toString());
+		tomcat.setPort(port);
+		Connector connector = tomcat.getConnector();
+		connector.setProperty("address", InetAddress.getLoopbackAddress().getHostAddress());
+		connector.setProperty("useVirtualThreads", "true");
+		Context context = tomcat.addContext("", baseDir.toString());
+		HttpServletServerTransport.Builder transport = HttpServletServerTransport.builder(server());
+		if (CONFORMANCE) {
+			transport.contextExtractor(ConformanceFixtures::transportContext);
+		}
+		Tomcat.addServlet(context, "mcp", transport.build());
+		context.addServletMappingDecoded("/mcp", "mcp");
+		tomcat.start();
+		System.err.println("MCP server listening on http://localhost:" + connector.getLocalPort() + "/mcp");
+		tomcat.getServer().await();
 	}
 
 	static McpServer server() {
-		return McpServer.builder()
+		McpServer.Builder builder = McpServer.builder()
 			.serverInfo("mcp-demo-server", "0.1.0")
 			.instructions("A demo server. Try book_table for a multi round-trip tool, "
 					+ "or countdown with a progress token for progress notifications.")
@@ -98,8 +151,11 @@ public final class DemoServer {
 			.resources(readme(), time())
 			.resourceTemplates(weather())
 			.prompts(codeReview())
-			.completions(languageCompletion(), cityCompletion())
-			.build();
+			.completions(languageCompletion(), cityCompletion());
+		if (CONFORMANCE) {
+			ConformanceFixtures.register(builder);
+		}
+		return builder.build();
 	}
 
 	// ---------------------------
@@ -339,7 +395,7 @@ public final class DemoServer {
 				(context, request) -> complete(request, "city", CITIES));
 	}
 
-	private static CompleteResult complete(CompleteRequest request, String argument, List<String> candidates) {
+	static CompleteResult complete(CompleteRequest request, String argument, List<String> candidates) {
 		if (!argument.equals(request.argument().name())) {
 			return new CompleteResult(CompleteCompletion.builder(List.of()).build());
 		}
@@ -352,7 +408,7 @@ public final class DemoServer {
 	// Helpers
 	// ---------------------------
 
-	private static Map<String, Object> objectSchema(Map<String, Object> properties, String... required) {
+	static Map<String, Object> objectSchema(Map<String, Object> properties, String... required) {
 		return Map.of("type", "object", "properties", properties, "required", List.of(required));
 	}
 
@@ -361,7 +417,7 @@ public final class DemoServer {
 	 * blocks must turn the {@link InterruptedException} of a cancellation into an
 	 * unchecked exception, restoring the interrupt status.
 	 */
-	private static void sleep(Duration duration) {
+	static void sleep(Duration duration) {
 		try {
 			Thread.sleep(duration);
 		}
@@ -371,7 +427,7 @@ public final class DemoServer {
 		}
 	}
 
-	private static String toJson(Object value) {
+	static String toJson(Object value) {
 		try {
 			return jsonMapper.writeValueAsString(value);
 		}

@@ -90,7 +90,7 @@ async def connect(elicit: ElicitationHandler | None = None, **kwargs: Any):
             raise AssertionError(f"unexpected elicitation: {params.message}")
         return elicit(params)
 
-    params = StdioServerParameters(command="java", args=["-jar", str(JAR)])
+    params = StdioServerParameters(command="java", args=["-jar", str(JAR)], env={"MCP_MODE": "stdio"})
     options: dict[str, Any] = {
         "mode": PROTOCOL_VERSION,
         "client_info": CLIENT_INFO,

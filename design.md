@@ -125,6 +125,50 @@ are not the conformance harness (§12.1).
 caller code than from signatures. Keeping that code in the build means it
 breaks, and gets updated, whenever the API changes.
 
+### D7 — No Reactor: blocking, virtual-thread-friendly APIs only
+
+`mcp-core-modern` does not use Project Reactor, neither in its public API nor in
+its implementation, and does not depend on it. There is a single API surface: plain blocking
+calls (`CallToolResult callTool(...)`, handlers returning `CallToolOutcome`
+directly). No `Mono` / `Flux`, no sync/async pair.
+
+The implementation must be virtual-thread-friendly:
+- no thread pools owned by the SDK for request handling; where the SDK needs to
+  run work concurrently (e.g. dispatching a round of `inputRequests`), the
+  `Executor` is user-configurable;
+- no reliance on expensive-per-thread state (`ThreadLocal` caches).
+
+The baseline of the `2026-07-28` modules (`mcp-core-modern`, `mcp-test-modern`,
+`mcp-demo-*`) is Java 25. `mcp-json` stays on Java 17, since `mcp-core` depends
+on it. On Java 25, `synchronized` no longer pins the carrier thread (JEP 491),
+so it needs no special treatment. Preview APIs such as `StructuredTaskScope`
+are not used: preview class files only run on the exact JDK they were compiled
+for, with `--enable-preview`.
+
+*Rationale:* the sync/async split is the main source of API duplication in the
+existing SDK (see §2 goals). With virtual threads, blocking code scales without
+a reactive API, and it is simpler to write, read and debug.
+
+### D8 — Nullability is declared with JSpecify
+
+`mcp-core-modern` uses [JSpecify](https://jspecify.dev) (`org.jspecify:jspecify`)
+annotations. Every package is `@NullMarked`, so types are non-null unless
+annotated `@Nullable`.
+
+In `McpSchema`, nullability follows the spec:
+- spec-required fields are non-null, and are rejected at construction;
+- optional fields are `@Nullable`;
+- the parameters of the `@JsonCreator` `fromJson` factories are all
+  `@Nullable`, since a peer may omit any field on the wire.
+
+Not annotated for now: the value types of raw JSON maps
+(`Map<String, Object>`), which can hold JSON `null`s.
+
+*Rationale:* the schema has many optional fields, and records make it easy to
+pass `null` where the spec requires a value. Annotations make the contract
+visible in the API and checkable by tools (IDEs, NullAway), and JSpecify is the
+standard, tool-neutral choice.
+
 ---
 
 ## 5. Implementation inventory
@@ -649,6 +693,134 @@ per-request context object replacing `McpAsyncServerExchange`. Settled there.
 TODO — Streamable HTTP changes, `subscriptions/listen`, resumability removal,
 required headers, `x-mcp-header`.
 
+### 8.1 Shared-connection transports write from a single writer thread
+
+A transport that multiplexes many requests over one connection (stdio, or a
+custom transport over a TCP or Unix-domain socket) must:
+- send every outgoing message through a single writer thread fed by a queue;
+- never write to the shared stream from a handler's thread. The
+  `notifications` consumer passed to `McpServer.handleRequest` enqueues the
+  notification and returns;
+- serialize each message on the thread sending it, and queue the bytes, so
+  that one large result does not delay every other message, and a message
+  that fails to serialize can be dropped (or, for a response, replaced by an
+  `INTERNAL_ERROR`) without stopping the writer;
+- bound the queue, by bytes. When it is full, e.g. because the client does not
+  read, the senders wait, and a cancelled handler stops waiting. `StdioServerTransport`
+  bounds it to 16MB with a `Semaphore` rather than a bounded queue, so that the
+  end-of-output marker can always be queued.
+
+*Rationale:* cancellation may interrupt the handler thread (SR15). On a virtual
+thread, an interrupt during a blocking socket or `InterruptibleChannel`
+operation closes the socket or channel. If a handler thread were interrupted
+while writing, it would close the connection for every in-flight request, not
+just the cancelled one.
+
+Streamable HTTP has one response stream per request, but over HTTP/2 the
+streams share one TCP connection, and whether an interrupt during a servlet
+write closes it depends on the container (unverified). So the HTTP transport
+also keeps writes off the handler thread (§8.2).
+
+This constraint is in the javadoc of `StdioServerTransport`.
+
+### 8.2 Cancellation is implemented by the transport, by interrupting the handler thread
+
+The cancellation signal depends on the transport
+(`basic/patterns/cancellation.mdx`):
+- **stdio:** the client MUST send `notifications/cancelled` with the request
+  id. The server SHOULD stop the work and SHOULD NOT send a response.
+- **Streamable HTTP:** closing the response stream is the cancellation. The
+  server MUST treat a client disconnect as cancellation, and MUST NOT send
+  anything further for that request. No client-to-server notification is
+  defined over HTTP.
+
+The transport cancels a request by interrupting the thread that runs
+`McpServer.handleRequest`. `McpServer` has no cancellation API and no
+in-flight registry:
+- it has no connection, and request ids are only unique among the in-flight
+  requests of one sender (`basic/index.mdx`), so a server-level registry would
+  let one client cancel another's request. All four sibling SDKs ignore a
+  `notifications/cancelled` POST on stateless HTTP for that reason;
+- the transport owns the thread and the response, so it is the one that can
+  interrupt the first and drop the second.
+
+The interrupt is the cancellation signal handlers see. Blocking JDK calls
+already react to it: `Thread.sleep`, `BlockingQueue`, `Future.get`,
+`HttpClient.send`, and, on a virtual thread, `java.net.Socket` I/O. With one
+thread per request, the interrupt can only reach the cancelled request. With a
+shared pool it could land on whatever task reuses the thread.
+
+**`McpServer`.** When the handler fails and the thread is interrupted, or an
+`InterruptedException` is in the cause chain, the request was cancelled. The
+server logs it at debug instead of error, restores the interrupt status if the
+handler cleared it, and returns an `INTERNAL_ERROR` that the transport drops.
+A handler that finishes despite the interrupt returns its result as usual, and
+the transport drops that too.
+
+**stdio**, and any transport multiplexing requests over one connection:
+
+```java
+// Reader thread. It reads requests and cancellations in order, so a thread is
+// registered and started before any cancellation of its id is read.
+case JSONRPCRequest request -> {
+    Thread thread = threadFactory.newThread(() -> {   // default: Thread.ofVirtual().factory()
+        JSONRPCResponse response = server.handleRequest(context, request, outbox::add);
+        if (inFlight.remove(request.id(), Thread.currentThread())) {
+            outbox.add(response);                     // removing the entry decides the race
+        }
+    });
+    if (inFlight.putIfAbsent(request.id(), thread) != null) {
+        outbox.add(invalidRequest(request.id(), "Duplicate request id"));
+        return;
+    }
+    thread.start();
+}
+case JSONRPCNotification n when METHOD_NOTIFICATION_CANCELLED.equals(n.method()) -> {
+    Thread thread = inFlight.remove(requestId(n));    // unknown or completed: ignored
+    if (thread != null) {
+        thread.interrupt();
+    }
+}
+```
+
+- `inFlight` is a `ConcurrentMap<RequestId, Thread>`, scoped to the
+  connection. Whichever of the handler or the cancellation removes the entry
+  decides whether the response is sent.
+- `outbox` is drained by the single writer thread of §8.1.
+- The transport takes a `ThreadFactory` rather than D7's `Executor`, since it
+  needs the `Thread` to interrupt.
+
+**Streamable HTTP.** The handler runs on its own thread, not the container's.
+The servlet thread writes the messages the handler queues for the request. It
+interrupts the handler when a write fails, or when the container reports the
+disconnect. The servlet API has no portable way to notice a disconnect while
+nothing is written, so a silent handler learns about it late. Periodic SSE
+comments would bound that delay, at the cost of always answering with SSE.
+
+**Limits.** These must go in the handler javadoc:
+- The interrupt is cooperative. It does not stop a CPU-bound loop that never
+  checks `Thread.interrupted()`, code that swallows `InterruptedException`,
+  `synchronized`, or `ReentrantLock.lock()`.
+- It does not reach threads the handler starts. `StructuredTaskScope` would
+  pass it on, but it is a preview API (D7), so handlers pass it on themselves.
+- On a virtual thread, it closes the `java.net.Socket` or `InterruptibleChannel`
+  the handler is blocked on. A pooled JDBC connection used at that moment is
+  broken, and the pool must evict it.
+
+*Rationale:* the spec defines cancellation per transport, and only the
+transport knows which requests a cancellation can apply to. Interrupting a
+virtual thread is Java's built-in cancellation signal for blocking code, so
+handlers need no new API.
+
+OPEN: handlers are `BiFunction`s, so a handler that blocks must catch
+`InterruptedException`, restore the interrupt status and wrap it. SDK
+functional interfaces declaring `throws Exception` would remove that
+boilerplate. Changing it later breaks the API.
+
+OPEN: the spec contradicts itself on a cancelled `subscriptions/listen`:
+`cancellation.mdx` says no response, `subscriptions.mdx` says the server
+SHOULD send a `complete` result. To settle with SR12.
+
 ## 9. Client API surface
 
 TODO
@@ -744,15 +916,111 @@ with the same pinned suite version. Every scenario also emits
 
 TODO — PR breakdown.
 
+### 13.1 Status: basic server
+
+Done: `McpSchema` server-side types and `McpServer` with its builder in
+`mcp-core-modern`, and the stdio server transport (T1),
+`StdioServerTransport`, as described in §8.1 and §8.2. Tests in
+`mcp-test-modern`.
+
+The stdio transport:
+- `run()` blocks, reading `stdin` until end of stream. At end of stream, it
+  cancels the in-flight requests, writes the messages already queued, and
+  returns.
+- Answers invalid JSON with `-32700`, an invalid JSON-RPC envelope, a
+  duplicate in-flight request id, or a line longer than `maxMessageSize`
+  (16M characters by default) with `-32600`, and carries on reading.
+- Ignores the responses a client sends, and every notification except
+  `notifications/cancelled`.
+- Queues up to 16MB of serialized messages for the writer thread (§8.1).
+
+The Streamable HTTP server transport (T3, T4, T6, T9, T10),
+`HttpServletServerTransport`, is a servlet:
+- `POST` only; every other method gets `405` with `Allow: POST`. Client
+  notifications get `202` and are ignored.
+- Before dispatch, in order: `Origin` / `Host` (`403`; by default, only
+  localhost `http` origins are allowed, and any host), `Accept` must list both
+  `application/json` and `text/event-stream` (`406`), `Content-Type` must be
+  `application/json` (`415`), body size (`413`, 16MB by default), and a
+  single JSON-RPC request or notification (`-32700` / `-32600`).
+- `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` must be present once,
+  and match the body, else `-32020`. `Mcp-Name` is trimmed, and decoded from
+  `=?base64?...?=`. These checks are skipped when the body lacks the required
+  `_meta` fields: the server then answers `-32602`, as the conformance suite
+  expects.
+- A response sent as JSON gets the HTTP status of its error code, one table
+  whoever produced the error, as in the Python SDK: `404` for `-32601`, `400`
+  for `-32700`, `-32600`, `-32602`, `-32020`, `-32021` and `-32022`, `200`
+  otherwise.
+- The response is JSON, unless the handler emits a notification first. It
+  then becomes an SSE stream, `200` with `X-Accel-Buffering: no`, with one
+  `data:` line per message, ending with the response.
+- As §8.2 describes: the handler runs on a thread from a `ThreadFactory`
+  (virtual by default), and the container thread writes. The two share a
+  handoff queue of up to 64 notifications; a sender waits beyond that. A
+  failed write closes the queue and interrupts the handler.
+
+`mcp-demo-server` (D6) runs a server that uses every feature above:
+plain, structured-output, streaming (progress + cancellation) and multi
+round-trip tools, resources with caching hints, a resource template, a prompt
+and completions. `java -jar mcp-demo-server/target/mcp-demo-server-*.jar`
+serves Streamable HTTP at `http://localhost:8080/mcp` (port from `MCP_PORT`),
+on an embedded Tomcat bound to the loopback interface. `MCP_MODE=stdio`
+switches to stdio.
+
+Not implemented yet:
+- `subscriptions/listen` (and the `notifications/subscriptions/acknowledged`
+  types), with the `list_changed` and `resources/updated` notifications it
+  carries. Registries are fixed at `build()`, so nothing emits `list_changed`
+  yet, and a user-supplied `capabilities(...)` can advertise `listChanged` or
+  `subscribe` without the server supporting them.
+- Pagination: every list is returned in a single page, and any `cursor` is
+  rejected with `-32602`.
+- Validation of `tools/call` arguments against the tool's `inputSchema`. Tool
+  names, the validity of `inputSchema` / `outputSchema`, and the conformance
+  of `structuredContent` to `outputSchema` are checked.
+- Unsupported schema dialects: schemas declaring a `$schema` other than
+  2020-12 are accepted without meta-schema validation (the `mcp-json`
+  `JsonSchemaValidator` behavior) instead of rejected with an error.
+- `$ref` resolution and composition-keyword bounds (SR17) are whatever the
+  `JsonSchemaValidator` implementation does, not enforced by the server.
+- `x-mcp-header` constraints on tool input schemas, checked at registration.
+- Over Streamable HTTP, a handler that emits nothing learns about a client
+  disconnect only when its response is written: the servlet API can't detect
+  a disconnect while nothing is written. There are no SSE keep-alive comments
+  (§8.2), so long silent requests don't upgrade to a stream.
+- Server-side validation of `Mcp-Param-*` headers against `x-mcp-header`
+  tool parameters (T5): the transport can't see the tool schemas.
+  (`http-custom-header-server-validation` is not scored.)
+- `MissingRequiredClientCapabilityError` (`-32021`) raised by handlers: the
+  server raises it when an `InputRequiredResult` carries an elicitation mode
+  the client did not declare, but handlers have no way to raise it before
+  doing any work, e.g. for a capability required by an extension.
+- MRTR server obligations (SR10, SR11): no `requestState` integrity
+  protection.
+- Extensions (SR20): `ServerCapabilities.extensions` can be declared, but
+  there is no way to dispatch extension methods or extension `resultType`s.
+- OTel trace context propagation through `_meta` (SR19).
+- Single-pass JSON-RPC deserialization: `McpSchema.deserializeJsonRpcMessage`
+  parses every incoming message into a `Map`, then `convertValue`s the map
+  into the envelope record, so each message is processed twice. Ported as-is
+  from `mcp-core`, which does the same. Fix it for every transport at once, in
+  its own change, backed by a benchmark.
+
+On hold, deprecated in `2026-07-28` (see open questions):
+- Logging (P13, SR13): the request's `logLevel` is parsed and exposed on
+  `McpRequestContext`, but handlers cannot emit `notifications/message`.
+- Sampling (P20): no `CreateMessageRequest` `InputRequest`.
+- Roots (P21): no `ListRootsRequest` `InputRequest`.
+
 ---
 
 ## Open questions
 
 - §7.4 Is a `RequestStateCodec` mandatory, or warn-only? (leaning: warn)
 - §7.4 Naming: `CallToolOutcome` / `GetPromptOutcome` / `ReadResourceOutcome`.
+- §8.2 Should handler functional interfaces declare `throws Exception`?
 - §4 parent pom for `mcp3-*`.
 - Do we ship `mcp3-json-jackson2` at all, or is v3 Jackson-3-only?
-- Sync API: does v3 keep the sync/async duality, or async-only with a sync
-  wrapper?
 - Roots/Sampling/Logging are deprecated on arrival. Does v3 implement them at
-  all, or skip them and tell users to stay on v2?
+  all, or skip them and tell users to stay on v2? (on hold for now, see §13.1)
