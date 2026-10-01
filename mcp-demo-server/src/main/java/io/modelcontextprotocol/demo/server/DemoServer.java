@@ -58,6 +58,7 @@ import org.apache.catalina.Context;
 import org.apache.catalina.LifecycleException;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A demo MCP server showcasing the features of the {@code 2026-07-28} server API:

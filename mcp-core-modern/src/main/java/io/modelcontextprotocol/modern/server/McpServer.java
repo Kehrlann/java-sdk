@@ -6,7 +6,6 @@ package io.modelcontextprotocol.modern.server;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -160,19 +159,38 @@ public final class McpServer {
 
 	private final @Nullable String instructions;
 
-	private final Map<String, StreamingToolSpecification> tools;
+	private final Map<String, ToolSpecification> tools;
+
+	private final Map<String, StreamingToolSpecification> streamingTools;
 
 	private final List<Tool> toolList;
 
-	private final Map<String, StreamingResourceSpecification> resources;
+	private final Map<String, ResourceSpecification> resources;
+
+	private final Map<String, StreamingResourceSpecification> streamingResources;
 
 	private final List<Resource> resourceList;
 
-	private final List<StreamingResourceTemplateSpecification> resourceTemplates;
+	/**
+	 * Keyed by URI template.
+	 */
+	private final Map<String, ResourceTemplateSpecification> resourceTemplates;
+
+	/**
+	 * Keyed by URI template.
+	 */
+	private final Map<String, StreamingResourceTemplateSpecification> streamingResourceTemplates;
+
+	/**
+	 * In registration order, the order in which templates are matched.
+	 */
+	private final List<ResourceTemplate> resourceTemplateList;
 
 	private final List<DefaultMcpUriTemplateManager> resourceTemplateMatchers;
 
-	private final Map<String, StreamingPromptSpecification> prompts;
+	private final Map<String, PromptSpecification> prompts;
+
+	private final Map<String, StreamingPromptSpecification> streamingPrompts;
 
 	private final List<Prompt> promptList;
 
@@ -191,23 +209,28 @@ public final class McpServer {
 		this.capabilities = builder.capabilities != null ? builder.capabilities : builder.deriveCapabilities();
 		this.instructions = builder.instructions;
 		this.tools = Map.copyOf(builder.tools);
+		this.streamingTools = Map.copyOf(builder.streamingTools);
+		this.toolList = List.copyOf(builder.toolDefinitions.values());
 		this.resources = Map.copyOf(builder.resources);
-		this.resourceTemplates = List.copyOf(builder.resourceTemplates);
-		this.resourceTemplateMatchers = this.resourceTemplates.stream()
-			.map(spec -> new DefaultMcpUriTemplateManager(spec.resourceTemplate().uriTemplate()))
+		this.streamingResources = Map.copyOf(builder.streamingResources);
+		this.resourceList = List.copyOf(builder.resourceDefinitions.values());
+		this.resourceTemplates = Map.copyOf(builder.resourceTemplates);
+		this.streamingResourceTemplates = Map.copyOf(builder.streamingResourceTemplates);
+		this.resourceTemplateList = List.copyOf(builder.resourceTemplateDefinitions.values());
+		this.resourceTemplateMatchers = this.resourceTemplateList.stream()
+			.map(template -> new DefaultMcpUriTemplateManager(template.uriTemplate()))
 			.toList();
 		this.prompts = Map.copyOf(builder.prompts);
+		this.streamingPrompts = Map.copyOf(builder.streamingPrompts);
+		this.promptList = List.copyOf(builder.promptDefinitions.values());
 		this.completions = Map.copyOf(builder.completions);
 		this.ttlMs = builder.ttl.toMillis();
 		this.cacheScope = builder.cacheScope;
 		this.jsonMapper = builder.jsonMapper != null ? builder.jsonMapper : McpJsonDefaults.getMapper();
 		this.jsonSchemaValidator = builder.jsonSchemaValidator != null ? builder.jsonSchemaValidator
 				: McpJsonDefaults.getSchemaValidator();
-		this.tools.values().forEach(spec -> assertValidSchemas(spec.tool()));
+		this.toolList.forEach(this::assertValidSchemas);
 		this.serverInfoWire = this.jsonMapper.convertValue(this.serverInfo, MAP_TYPE_REF);
-		this.toolList = builder.tools.values().stream().map(StreamingToolSpecification::tool).toList();
-		this.resourceList = builder.resources.values().stream().map(StreamingResourceSpecification::resource).toList();
-		this.promptList = builder.prompts.values().stream().map(StreamingPromptSpecification::prompt).toList();
 	}
 
 	public static Builder builder() {
@@ -332,10 +355,8 @@ public final class McpServer {
 			case McpSchema.METHOD_RESOURCES_TEMPLATES_LIST -> {
 				requireCapability(method, this.capabilities.resources());
 				assertFirstPage(convertParams(params, PaginatedRequest.class));
-				List<ResourceTemplate> templates = this.resourceTemplates.stream()
-					.map(StreamingResourceTemplateSpecification::resourceTemplate)
-					.toList();
-				yield new ListResourceTemplatesResult(templates, null, this.ttlMs, this.cacheScope, null);
+				yield new ListResourceTemplatesResult(this.resourceTemplateList, null, this.ttlMs, this.cacheScope,
+						null);
 			}
 			case McpSchema.METHOD_RESOURCES_READ -> {
 				requireCapability(method, this.capabilities.resources());
@@ -360,15 +381,25 @@ public final class McpServer {
 
 	private CallToolOutcome callTool(McpRequestContext context, CallToolRequest request,
 			Consumer<JSONRPCNotification> notifications) {
-		StreamingToolSpecification spec = this.tools.get(request.name());
-		if (spec == null) {
+		Tool tool;
+		CallToolOutcome outcome;
+		ToolSpecification spec = this.tools.get(request.name());
+		StreamingToolSpecification streamingSpec = this.streamingTools.get(request.name());
+		if (spec != null) {
+			tool = spec.tool();
+			outcome = spec.callHandler().apply(context, request);
+		}
+		else if (streamingSpec != null) {
+			tool = streamingSpec.tool();
+			outcome = stream(streamingSpec.streamingHandler(), context, request, notifications);
+		}
+		else {
 			throw new McpError(ErrorCodes.INVALID_PARAMS, "Unknown tool: " + request.name());
 		}
-		CallToolOutcome outcome = stream(spec.streamingHandler(), context, request, notifications);
 		if (!(outcome instanceof CallToolResult result)) {
 			return outcome;
 		}
-		Map<String, Object> outputSchema = spec.tool().outputSchema();
+		Map<String, Object> outputSchema = tool.outputSchema();
 		if (outputSchema != null) {
 			result = checkStructuredContent(request.name(), outputSchema, result);
 		}
@@ -435,13 +466,26 @@ public final class McpServer {
 
 	private ReadResourceOutcome readResource(McpRequestContext context, ReadResourceRequest request,
 			Consumer<JSONRPCNotification> notifications) {
-		StreamingResourceSpecification spec = this.resources.get(request.uri());
+		ResourceSpecification spec = this.resources.get(request.uri());
 		if (spec != null) {
-			return stream(spec.streamingHandler(), context, request, notifications);
+			return spec.readHandler().apply(context, request);
 		}
-		for (int i = 0; i < this.resourceTemplates.size(); i++) {
+		StreamingResourceSpecification streamingSpec = this.streamingResources.get(request.uri());
+		if (streamingSpec != null) {
+			return stream(streamingSpec.streamingHandler(), context, request, notifications);
+		}
+		for (int i = 0; i < this.resourceTemplateList.size(); i++) {
 			if (this.resourceTemplateMatchers.get(i).matches(request.uri())) {
-				return stream(this.resourceTemplates.get(i).streamingHandler(), context, request, notifications);
+				String uriTemplate = this.resourceTemplateList.get(i).uriTemplate();
+				ResourceTemplateSpecification templateSpec = this.resourceTemplates.get(uriTemplate);
+				if (templateSpec != null) {
+					return templateSpec.readHandler().apply(context, request);
+				}
+				StreamingResourceTemplateSpecification streamingTemplateSpec = this.streamingResourceTemplates
+					.get(uriTemplate);
+				if (streamingTemplateSpec != null) {
+					return stream(streamingTemplateSpec.streamingHandler(), context, request, notifications);
+				}
 			}
 		}
 		throw new McpError(ErrorCodes.INVALID_PARAMS, "Resource not found", Map.of("uri", request.uri()));
@@ -449,12 +493,17 @@ public final class McpServer {
 
 	private GetPromptOutcome getPrompt(McpRequestContext context, GetPromptRequest request,
 			Consumer<JSONRPCNotification> notifications) {
-		StreamingPromptSpecification spec = this.prompts.get(request.name());
-		if (spec == null) {
-			throw new McpError(ErrorCodes.INVALID_PARAMS, "Unknown prompt: " + request.name());
+		PromptSpecification spec = this.prompts.get(request.name());
+		if (spec != null) {
+			assertRequiredArguments(spec.prompt(), request);
+			return spec.getHandler().apply(context, request);
 		}
-		assertRequiredArguments(spec.prompt(), request);
-		return stream(spec.streamingHandler(), context, request, notifications);
+		StreamingPromptSpecification streamingSpec = this.streamingPrompts.get(request.name());
+		if (streamingSpec != null) {
+			assertRequiredArguments(streamingSpec.prompt(), request);
+			return stream(streamingSpec.streamingHandler(), context, request, notifications);
+		}
+		throw new McpError(ErrorCodes.INVALID_PARAMS, "Unknown prompt: " + request.name());
 	}
 
 	/**
@@ -741,13 +790,33 @@ public final class McpServer {
 
 		private @Nullable String instructions;
 
-		private final Map<String, StreamingToolSpecification> tools = new LinkedHashMap<>();
+		/**
+		 * The definitions of all registered tools, streaming or not, in registration
+		 * order. Same for resources, resource templates and prompts below.
+		 */
+		private final Map<String, Tool> toolDefinitions = new LinkedHashMap<>();
 
-		private final Map<String, StreamingResourceSpecification> resources = new LinkedHashMap<>();
+		private final Map<String, ToolSpecification> tools = new LinkedHashMap<>();
 
-		private final List<StreamingResourceTemplateSpecification> resourceTemplates = new ArrayList<>();
+		private final Map<String, StreamingToolSpecification> streamingTools = new LinkedHashMap<>();
 
-		private final Map<String, StreamingPromptSpecification> prompts = new LinkedHashMap<>();
+		private final Map<String, Resource> resourceDefinitions = new LinkedHashMap<>();
+
+		private final Map<String, ResourceSpecification> resources = new LinkedHashMap<>();
+
+		private final Map<String, StreamingResourceSpecification> streamingResources = new LinkedHashMap<>();
+
+		private final Map<String, ResourceTemplate> resourceTemplateDefinitions = new LinkedHashMap<>();
+
+		private final Map<String, ResourceTemplateSpecification> resourceTemplates = new LinkedHashMap<>();
+
+		private final Map<String, StreamingResourceTemplateSpecification> streamingResourceTemplates = new LinkedHashMap<>();
+
+		private final Map<String, Prompt> promptDefinitions = new LinkedHashMap<>();
+
+		private final Map<String, PromptSpecification> prompts = new LinkedHashMap<>();
+
+		private final Map<String, StreamingPromptSpecification> streamingPrompts = new LinkedHashMap<>();
 
 		private final Map<CompleteReference, CompletionSpecification> completions = new LinkedHashMap<>();
 
@@ -843,13 +912,12 @@ public final class McpServer {
 		 */
 		public Builder tools(List<ToolSpecification> toolSpecifications) {
 			Assert.notNull(toolSpecifications, "toolSpecifications must not be null");
-			List<StreamingToolSpecification> streamingSpecifications = new ArrayList<>();
 			for (ToolSpecification spec : toolSpecifications) {
 				Assert.notNull(spec, "toolSpecification must not be null");
-				streamingSpecifications.add(new StreamingToolSpecification(spec.tool(),
-						(ctx, request, sink) -> sink.complete(spec.callHandler().apply(ctx, request))));
+				registerTool(spec.tool());
+				this.tools.put(spec.tool().name(), spec);
 			}
-			return streamingTools(streamingSpecifications);
+			return this;
 		}
 
 		/**
@@ -887,13 +955,18 @@ public final class McpServer {
 			Assert.notNull(toolSpecifications, "toolSpecifications must not be null");
 			for (StreamingToolSpecification spec : toolSpecifications) {
 				Assert.notNull(spec, "toolSpecification must not be null");
-				String name = spec.tool().name();
-				Assert.isTrue(TOOL_NAME.matcher(name).matches(), "Tool name '" + name
-						+ "' must be 1 to 128 characters among A-Z, a-z, 0-9, underscore, hyphen and dot");
-				Assert.isTrue(!this.tools.containsKey(name), "Tool '" + name + "' is already registered");
-				this.tools.put(name, spec);
+				registerTool(spec.tool());
+				this.streamingTools.put(spec.tool().name(), spec);
 			}
 			return this;
+		}
+
+		private void registerTool(Tool tool) {
+			String name = tool.name();
+			Assert.isTrue(TOOL_NAME.matcher(name).matches(), "Tool name '" + name
+					+ "' must be 1 to 128 characters among A-Z, a-z, 0-9, underscore, hyphen and dot");
+			Assert.isTrue(!this.toolDefinitions.containsKey(name), "Tool '" + name + "' is already registered");
+			this.toolDefinitions.put(name, tool);
 		}
 
 		/**
@@ -927,13 +1000,12 @@ public final class McpServer {
 		 */
 		public Builder resources(List<ResourceSpecification> resourceSpecifications) {
 			Assert.notNull(resourceSpecifications, "resourceSpecifications must not be null");
-			List<StreamingResourceSpecification> streamingSpecifications = new ArrayList<>();
 			for (ResourceSpecification spec : resourceSpecifications) {
 				Assert.notNull(spec, "resourceSpecification must not be null");
-				streamingSpecifications.add(new StreamingResourceSpecification(spec.resource(),
-						(ctx, request, sink) -> sink.complete(spec.readHandler().apply(ctx, request))));
+				registerResource(spec.resource());
+				this.resources.put(spec.resource().uri(), spec);
 			}
-			return streamingResources(streamingSpecifications);
+			return this;
 		}
 
 		/**
@@ -968,11 +1040,16 @@ public final class McpServer {
 			Assert.notNull(resourceSpecifications, "resourceSpecifications must not be null");
 			for (StreamingResourceSpecification spec : resourceSpecifications) {
 				Assert.notNull(spec, "resourceSpecification must not be null");
-				String uri = spec.resource().uri();
-				Assert.isTrue(!this.resources.containsKey(uri), "Resource '" + uri + "' is already registered");
-				this.resources.put(uri, spec);
+				registerResource(spec.resource());
+				this.streamingResources.put(spec.resource().uri(), spec);
 			}
 			return this;
+		}
+
+		private void registerResource(Resource resource) {
+			String uri = resource.uri();
+			Assert.isTrue(!this.resourceDefinitions.containsKey(uri), "Resource '" + uri + "' is already registered");
+			this.resourceDefinitions.put(uri, resource);
 		}
 
 		/**
@@ -1010,13 +1087,12 @@ public final class McpServer {
 		 */
 		public Builder resourceTemplates(List<ResourceTemplateSpecification> resourceTemplateSpecifications) {
 			Assert.notNull(resourceTemplateSpecifications, "resourceTemplateSpecifications must not be null");
-			List<StreamingResourceTemplateSpecification> streamingSpecifications = new ArrayList<>();
 			for (ResourceTemplateSpecification spec : resourceTemplateSpecifications) {
 				Assert.notNull(spec, "resourceTemplateSpecification must not be null");
-				streamingSpecifications.add(new StreamingResourceTemplateSpecification(spec.resourceTemplate(),
-						(ctx, request, sink) -> sink.complete(spec.readHandler().apply(ctx, request))));
+				registerResourceTemplate(spec.resourceTemplate());
+				this.resourceTemplates.put(spec.resourceTemplate().uriTemplate(), spec);
 			}
-			return streamingResourceTemplates(streamingSpecifications);
+			return this;
 		}
 
 		/**
@@ -1060,14 +1136,17 @@ public final class McpServer {
 			Assert.notNull(resourceTemplateSpecifications, "resourceTemplateSpecifications must not be null");
 			for (StreamingResourceTemplateSpecification spec : resourceTemplateSpecifications) {
 				Assert.notNull(spec, "resourceTemplateSpecification must not be null");
-				String uriTemplate = spec.resourceTemplate().uriTemplate();
-				Assert.isTrue(
-						this.resourceTemplates.stream()
-							.noneMatch(existing -> existing.resourceTemplate().uriTemplate().equals(uriTemplate)),
-						"Resource template '" + uriTemplate + "' is already registered");
-				this.resourceTemplates.add(spec);
+				registerResourceTemplate(spec.resourceTemplate());
+				this.streamingResourceTemplates.put(spec.resourceTemplate().uriTemplate(), spec);
 			}
 			return this;
+		}
+
+		private void registerResourceTemplate(ResourceTemplate resourceTemplate) {
+			String uriTemplate = resourceTemplate.uriTemplate();
+			Assert.isTrue(!this.resourceTemplateDefinitions.containsKey(uriTemplate),
+					"Resource template '" + uriTemplate + "' is already registered");
+			this.resourceTemplateDefinitions.put(uriTemplate, resourceTemplate);
 		}
 
 		/**
@@ -1101,13 +1180,12 @@ public final class McpServer {
 		 */
 		public Builder prompts(List<PromptSpecification> promptSpecifications) {
 			Assert.notNull(promptSpecifications, "promptSpecifications must not be null");
-			List<StreamingPromptSpecification> streamingSpecifications = new ArrayList<>();
 			for (PromptSpecification spec : promptSpecifications) {
 				Assert.notNull(spec, "promptSpecification must not be null");
-				streamingSpecifications.add(new StreamingPromptSpecification(spec.prompt(),
-						(ctx, request, sink) -> sink.complete(spec.getHandler().apply(ctx, request))));
+				registerPrompt(spec.prompt());
+				this.prompts.put(spec.prompt().name(), spec);
 			}
-			return streamingPrompts(streamingSpecifications);
+			return this;
 		}
 
 		/**
@@ -1142,11 +1220,16 @@ public final class McpServer {
 			Assert.notNull(promptSpecifications, "promptSpecifications must not be null");
 			for (StreamingPromptSpecification spec : promptSpecifications) {
 				Assert.notNull(spec, "promptSpecification must not be null");
-				String name = spec.prompt().name();
-				Assert.isTrue(!this.prompts.containsKey(name), "Prompt '" + name + "' is already registered");
-				this.prompts.put(name, spec);
+				registerPrompt(spec.prompt());
+				this.streamingPrompts.put(spec.prompt().name(), spec);
 			}
 			return this;
+		}
+
+		private void registerPrompt(Prompt prompt) {
+			String name = prompt.name();
+			Assert.isTrue(!this.promptDefinitions.containsKey(name), "Prompt '" + name + "' is already registered");
+			this.promptDefinitions.put(name, prompt);
 		}
 
 		/**
@@ -1247,13 +1330,13 @@ public final class McpServer {
 
 		private ServerCapabilities deriveCapabilities() {
 			ServerCapabilities.Builder builder = ServerCapabilities.builder();
-			if (!this.tools.isEmpty()) {
+			if (!this.toolDefinitions.isEmpty()) {
 				builder.tools(null);
 			}
-			if (!this.resources.isEmpty() || !this.resourceTemplates.isEmpty()) {
+			if (!this.resourceDefinitions.isEmpty() || !this.resourceTemplateDefinitions.isEmpty()) {
 				builder.resources(null, null);
 			}
-			if (!this.prompts.isEmpty()) {
+			if (!this.promptDefinitions.isEmpty()) {
 				builder.prompts(null);
 			}
 			if (!this.completions.isEmpty()) {

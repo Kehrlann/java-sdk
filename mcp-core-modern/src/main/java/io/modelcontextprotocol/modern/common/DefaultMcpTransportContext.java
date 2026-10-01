@@ -4,6 +4,7 @@
 
 package io.modelcontextprotocol.modern.common;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import io.modelcontextprotocol.modern.util.Assert;
@@ -24,6 +25,16 @@ final class DefaultMcpTransportContext implements McpTransportContext {
 	@Override
 	public @Nullable Object get(String key) {
 		return this.metadata.get(key);
+	}
+
+	@Override
+	public McpTransportContext putAll(McpTransportContext other) {
+		Assert.notNull(other, "other must not be null");
+		Assert.isTrue(other instanceof DefaultMcpTransportContext,
+				"other must be created with McpTransportContext.create, got " + other.getClass().getName());
+		Map<String, Object> merged = new HashMap<>(this.metadata);
+		merged.putAll(((DefaultMcpTransportContext) other).metadata);
+		return new DefaultMcpTransportContext(merged);
 	}
 
 	@Override

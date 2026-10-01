@@ -1075,6 +1075,44 @@ class McpServerTests {
 	}
 
 	@Test
+	void streamingAndBlockingToolsAreListedInRegistrationOrder() throws IOException {
+		McpServer server = McpServer.builder()
+			.streamingTool(Tool.builder("streaming").build(),
+					(ctx, request, sink) -> sink.complete(CallToolResult.builder().addTextContent("s").build()))
+			.tool(Tool.builder("blocking").build(), (ctx, request) -> CallToolResult.builder().build())
+			.build();
+
+		String tools = json(request(server, McpSchema.METHOD_TOOLS_LIST, Map.of("_meta", meta())));
+		assertThatJson(tools).node("result.tools[0].name").isEqualTo("streaming");
+		assertThatJson(tools).node("result.tools[1].name").isEqualTo("blocking");
+		assertThatJson(json(request(server, McpSchema.METHOD_TOOLS_CALL, Map.of("name", "streaming", "_meta", meta()))))
+			.node("result.content[0].text")
+			.isEqualTo("s");
+	}
+
+	@Test
+	void streamingAndBlockingResourceTemplatesAreMatchedInRegistrationOrder() throws IOException {
+		McpServer server = McpServer.builder()
+			.streamingResourceTemplate(ResourceTemplate.builder("docs://{name}", "streaming").build(),
+					(ctx, request, sink) -> sink
+						.complete(new ReadResourceResult(List.of(new TextResourceContents(request.uri(), null, "s")))))
+			.resourceTemplate(ResourceTemplate.builder("docs://{other}", "blocking").build(),
+					(ctx, request) -> new ReadResourceResult(
+							List.of(new TextResourceContents(request.uri(), null, "b"))))
+			.build();
+
+		assertThatJson(json(request(server, McpSchema.METHOD_RESOURCES_TEMPLATES_LIST, Map.of("_meta", meta()))))
+			.node("result.resourceTemplates")
+			.isEqualTo("""
+					[{"uriTemplate": "docs://{name}", "name": "streaming"},
+					 {"uriTemplate": "docs://{other}", "name": "blocking"}]""");
+		assertThatJson(
+				json(request(server, McpSchema.METHOD_RESOURCES_READ, Map.of("uri", "docs://readme", "_meta", meta()))))
+			.node("result.contents[0].text")
+			.isEqualTo("s");
+	}
+
+	@Test
 	void duplicateStreamingAndBlockingRegistrationsAreRejected() {
 		McpServer.Builder builder = McpServer.builder()
 			.tool(Tool.builder("t").build(), (ctx, request) -> CallToolResult.builder().build());

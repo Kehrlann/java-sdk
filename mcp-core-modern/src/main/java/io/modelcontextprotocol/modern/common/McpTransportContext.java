@@ -40,4 +40,13 @@ public interface McpTransportContext {
 	 */
 	@Nullable Object get(String key);
 
+	/**
+	 * Create a new context containing the values of both this context and the
+	 * {@code other} context. When both contexts contain the same key, the value from
+	 * {@code other} wins. Neither context is modified.
+	 * @param other the context whose values are added
+	 * @return a new context containing the values from both contexts
+	 */
+	McpTransportContext putAll(McpTransportContext other);
+
 }
